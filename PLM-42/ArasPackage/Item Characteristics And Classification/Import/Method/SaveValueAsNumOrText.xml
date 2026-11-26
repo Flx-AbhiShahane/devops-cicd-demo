@@ -1,0 +1,403 @@
+﻿<AML>
+ <Item type="Method" id="6B81FC03858C479A87B42D9A94F1983D" action="add">
+  <execution_allowed_to keyed_name="World" type="Identity">A73B655731924CD0B027E4F4D5FCC0A9</execution_allowed_to>
+  <method_code><![CDATA[/// this method saves the characteristics values entered into "display_value" to appropriated additional properties
+/// depending of type of characteritic  (i.e. number values)
+/// this is critical to enable searching by ranges and other value types later on !!!
+
+// Flexur 28-Apr-2025 Ticket: PLM-42 (Characterstic search shows Value instead of Label for List properties)
+// Removed Ticket: PLM-18 changes done earlier to this method. Now old change is not required since it works
+// correctly with the changes done in ...\Innovator\Client\javascript\Aras\Client\Controls\Public\CellWrapper.ts
+
+
+// +++ Main
+
+  int allowedTextLength;
+  Aras.IOM.Innovator inn = this.getInnovator();
+  I18NSessionContext I18Ncntx = inn.getI18NSessionContext();
+  char rangeChr = ':';
+  
+  // @WATLOW HZN-304 Fix for configurator characteristics
+  // only retrieve display_value and item_characteristic_id from this item
+  // get all other values from item characteristic item
+  string valueStr = this.getProperty("display_value", "");
+  string itemCharacteristicId = this.getProperty("item_characteristic_id", "");
+
+  // if characteristic_id is not specified, try to get from existing characteristic value
+  if (itemCharacteristicId.Equals("") && !this.getID().Equals(""))
+  {
+    Item existingVal = null;
+    try {
+        existingVal = inn.getItemById(this.getType(), this.getID());
+        itemCharacteristicId = existingVal.getProperty("item_characteristic_id", "");
+    } catch (Exception e) {
+        this.setAttribute("SaveValueAsNumOrText_err1", e.Message);
+    }
+  }
+
+  Item itemCharacteristic = null;
+  if (!String.IsNullOrEmpty(itemCharacteristicId))
+  {
+    itemCharacteristic = inn.getItemById("Item Characteristic", itemCharacteristicId);
+  }
+
+  if (itemCharacteristic == null)
+  {
+    return inn.newError("Cannot save characteristic value. Valid item_characteristic_id property required for SaveValueAsNumOrText method. Invalid value='" + itemCharacteristicId + "'");
+  }
+
+  string charUnit = itemCharacteristic.getProperty("value_unit_of_measure");
+  string charName = itemCharacteristic.getProperty("name");
+  string type = itemCharacteristic.getProperty("characteristic_value_type", "");
+  string minTolerance = itemCharacteristic.getProperty("allowed_min_value", "");
+  string maxTolerance = itemCharacteristic.getProperty("allowed_max_value", "");
+  string defaultTextValue = itemCharacteristic.getProperty("default_text_value", "");
+  string defaultMinValue = itemCharacteristic.getProperty("default_min_value", "");
+  string defaultMaxValue = itemCharacteristic.getProperty("default_max_value", "");
+  string allowedTextLengthStr = itemCharacteristic.getProperty("max_text_length", "128");
+  string allowedDecimalPrecision = itemCharacteristic.getProperty("value_decimal_precision", "");
+
+  if (!Int32.TryParse((allowedTextLengthStr), out allowedTextLength))
+  {
+    return inn.newError("Text Max length is not an integer value.");
+  }
+
+  switch (type)
+  {
+    case "Text":
+      if (this.getAction() == "add" && valueStr == "") // @WATLOW HZN-20: fix for characteristic defaults
+      {
+        valueStr = defaultTextValue;
+        this.setProperty("display_value", valueStr);
+      }
+      // validate length
+      if (valueStr.Length > allowedTextLength)
+      {
+        return inn.newError("The length of the text value of " + charName + " is longer than the maximum permitted length: " + allowedTextLength);
+      }
+      this.setProperty("text_value", valueStr);
+      break;
+    case "Number":
+
+      if (this.getAction() == "add" && valueStr == "")  // @WATLOW HZN-20: fix for characteristic defaults
+      {
+        if (defaultMaxValue == "")
+        {
+          valueStr = defaultMinValue;
+        }
+        else
+        {
+          valueStr = defaultMinValue + rangeChr + defaultMaxValue;
+        }
+        this.setProperty("display_value", valueStr);
+      }
+
+      if (valueStr == "")
+      {
+        this.setProperty("min_value", valueStr);
+        this.setProperty("max_value", valueStr);
+        break;
+      }
+
+      // Obs. problem when negative numbers are included
+      string[] segments = valueStr.Split(rangeChr);
+
+      if (segments.Length > 2)
+      {
+        return inn.newError("Value of " + charName + " must contain only one \"" + rangeChr + "\" character to specify a range.");
+      }
+
+      // Set From value
+      string valFromStr = segments[0];
+      string numericFromStr = "";
+      string unitFromStr = "";
+
+      if (!separateNumberAndUnit(valFromStr, out numericFromStr, out unitFromStr))
+      {
+        return inn.newError("Value " + valFromStr + " of " + charName + " doesn't have a correct format: Number[Unit]");
+      }
+
+      // set To value if exists
+      bool isRangeVal = false;
+      string valToStr = "";
+      string numericToStr = "";
+      string unitToStr = "";
+      string unitStr = "";
+
+      if (segments.Length == 2)
+      {
+        valToStr = segments[1];
+        isRangeVal = true;
+        if (!separateNumberAndUnit(valToStr, out numericToStr, out unitToStr) || !string.IsNullOrEmpty(unitFromStr))
+        {
+          return inn.newError("Value " + valueStr + " of " + charName + " doesn't have a correct format: Number:Number[Unit]");
+        }
+        unitStr = unitToStr;
+      } else {
+        unitStr = unitFromStr;
+      }
+
+      // verify if it is a valid numeric value based on the current culture
+      // Updated to default to "en-US" if current culture is not found.  
+      // The culture value will be null if called over REST - Jamey Evans 2023-11-01
+      string locale = I18Ncntx.GetLocale();
+      if (string.IsNullOrEmpty(locale)){
+          locale = "en-US";
+      }
+      CultureInfo ci = CultureInfo.GetCultureInfo(locale);
+
+
+      double fromNumericValue = 0.0;
+      double toNumericValue = 0.0;
+
+      if (!double.TryParse(numericFromStr, NumberStyles.Number, ci, out fromNumericValue))
+      {
+        return inn.newError("Min value of " + charName + " is not in a valid numeric format: " + numericFromStr);
+      }
+
+      if (isRangeVal)
+      {
+        if (!double.TryParse(numericToStr, NumberStyles.Number, ci, out toNumericValue))
+        {
+          return inn.newError("Max value of " + charName + " is not in a valid numeric format: " + numericToStr);
+        }
+
+        // Validate if the range is valid
+        if (toNumericValue< fromNumericValue)
+        {
+          return inn.newError("The range of " + charName + " is not valid. The min value is greater than the max value: " + numericFromStr + ">" + numericToStr);
+        }
+      }
+
+      // verify precision
+      int precisionRequired;
+      if (!Int32.TryParse(allowedDecimalPrecision, out precisionRequired))
+      {
+        inn.newError("Precision required is not an integer value.");
+      }
+      int fromPrecision = getDecimalsCount(numericFromStr, ci);
+      if (precisionRequired == 0 && fromPrecision != precisionRequired)
+      {
+        return inn.newError((isRangeVal ? "Min value of " : "Value of ") + charName + " must be an integer.");
+      }
+      if (isRangeVal)
+      {
+        int toPrecision = getDecimalsCount(numericToStr, ci); 
+        if (precisionRequired == 0 && toPrecision != precisionRequired)
+        {
+          return inn.newError("Max value of " + charName + " must be an integer.");
+        }
+      }
+
+      // Convert to neutral representation
+      if (numericFromStr != "")
+      {
+        numericFromStr = I18Ncntx.ConvertToNeutral(numericFromStr, "decimal", "");
+      }
+
+      if (numericToStr != "")
+      {
+        numericToStr = I18Ncntx.ConvertToNeutral(numericToStr, "decimal", "");
+      }
+
+      // Convert to base unit
+      if (!valFromStr.Equals("") && !string.IsNullOrEmpty(charUnit) && !unitStr.Equals(""))
+      {
+        string numericOldFromStr = numericFromStr + "";
+        numericFromStr = convertValueToBaseUnit(numericFromStr, unitStr, charUnit, ci);
+        string errNumber = numericFromStr == numericOldFromStr ? numericFromStr : ""; 
+        
+        // Convert ranged values to base unit
+        if (!valToStr.Equals(""))
+        {
+          string numericOldToStr = numericToStr + "";
+          numericToStr = convertValueToBaseUnit(numericToStr, unitStr, charUnit, ci);
+          errNumber = !errNumber.Equals("") || numericFromStr == numericOldFromStr ? numericFromStr + rangeChr + numericToStr : ""; 
+        }
+      
+      if (!errNumber.Equals(""))
+        { // conversion did not happen?
+          return inn.newError("Could not convert  " + errNumber + " from  [" + unitStr + "] to [" + charUnit + "]. <br><br>Things to check:<ul><li>Does the Characteristic Unit Conversion exist for [" + unitStr + "] -> [" + charUnit + "]?</li><li>Does the entered unit [" + unitStr + "] exist in the List named Characteristic Units?</li>");
+        }
+      
+      }
+
+      // validate against tolerance bounds
+      double minToleranceValue = 0;
+      double maxToleranceValue = 0;
+
+      if (minTolerance != "")
+      {
+        minToleranceValue = Convert.ToDouble(minTolerance);
+      }
+      else
+      {
+        minToleranceValue = Double.NegativeInfinity;
+        minTolerance = "(" + minToleranceValue.ToString() + ")";
+      }
+
+      if (maxTolerance != "")
+      {
+        maxToleranceValue = Convert.ToDouble(maxTolerance);
+      }
+      else
+      {
+        maxToleranceValue = Double.PositiveInfinity;
+        maxTolerance = "(" + maxToleranceValue.ToString() + ")";
+      }
+
+
+      if (!isRangeVal)
+      {
+        if (!(minToleranceValue <= fromNumericValue && maxToleranceValue >= fromNumericValue))
+        {
+          return inn.newError("Value is not between allowed boundaries: " + minTolerance + "-" + maxTolerance);
+        }
+      }
+      else if (!(minToleranceValue <= fromNumericValue && maxToleranceValue >= toNumericValue))
+      {
+        return inn.newError("Value range is not between allowed boundaries: " + minTolerance + "-" + maxTolerance);
+      }
+
+      this.setProperty("min_value", numericFromStr);
+      this.setProperty("max_value", numericToStr);
+      break;
+    case "List":
+      if (this.getAction() == "add" && valueStr == "")  // @WATLOW HZN-20: fix for characteristic defaults
+      {
+        valueStr = defaultTextValue;
+        this.setProperty("display_value", valueStr);
+        break;
+      }
+      
+      // @Watlow HZN-539
+      // check if list value then display label
+      // Jamey Evans - 01/26/2023 HZN 539      
+      Item ICLV = inn.newItem("Item Characteristic List Value", "get");
+      ICLV.setAttribute("select", "label, value");
+      ICLV.setProperty("source_id", itemCharacteristicId);
+      ICLV = ICLV.apply();
+      if (ICLV.isError()){
+          return inn.newError($"Error getting Item Characteristic List Item from SaveValueAsNumOrText. <br>{ICLV.getErrorString()}<br>{ICLV.getErrorDetail()}<br>{ICLV.getErrorSource()}");
+      }
+      int ICLVCount = ICLV.getItemCount();
+      
+      
+      this.setProperty("text_value", valueStr);
+      
+      for (int i = 0; i < ICLVCount; i++){
+          Item lvItm = ICLV.getItemByIndex(i);
+          if (valueStr.ToLower() == lvItm.getProperty("value", "").ToLower()){
+              valueStr = lvItm.getProperty("label", valueStr);
+              break;
+          }
+          else if (valueStr.ToLower() == lvItm.getProperty("label", "").ToLower()){
+              this.setProperty("text_value", lvItm.getProperty("value", valueStr));
+              break;
+          }
+      }
+      
+      this.setProperty("display_value", valueStr);
+      
+      // end update HZN-539
+      break;  //
+    default:
+      return this.getInnovator().newError("Unknown characteristic value type: '" + type + "'");
+  }
+
+  return this;
+}
+// --- end of Main
+
+public int getDecimalsCount(string sVal, CultureInfo info)
+{
+  char[] sep = info.NumberFormat.NumberDecimalSeparator.ToCharArray();
+  string[] segments = sVal.Split(sep);
+
+  switch (segments.Length)
+  {
+    //no decimals - return 0
+    case 1:
+      return 0;
+    //Two segments, so return the length of the second segment
+    case 2:
+      return segments[1].Length;
+
+    //More than two segments means it's invalid, so throw an exception
+    default:
+      return -1;
+  }
+}
+
+public bool separateNumberAndUnit(string sVal, out string numberStr, out string unitStr)
+{
+  int posLetter = -1;
+  numberStr = "";
+  unitStr = "";
+  for (int i = 0; i < sVal.Length; i++)
+  {
+    if (Char.IsLetter(sVal[i]))
+    {
+      posLetter = i;
+      break;
+    }
+  }
+
+  if (posLetter == 0)
+  {
+    return false;
+  }
+  else
+    if (posLetter == -1)
+  {
+    numberStr = sVal;
+  }
+  else
+  {
+    numberStr = sVal.Substring(0, posLetter);
+    unitStr = sVal.Substring(posLetter, sVal.Length - posLetter);
+  }
+
+  return true;
+}
+
+public string convertValueToBaseUnit(string valStr, string valUnit, string characteristicUnit, CultureInfo ci)
+{
+  Item qry = this.newItem("Item Characteristic Unit Conv", "get");
+  qry.setProperty("main_unit", characteristicUnit);
+  qry.setProperty("minor_unit", valUnit);
+  qry = qry.apply();
+
+  if (qry.getItemCount() == 1)
+  {
+    string factorStr = qry.getItemByIndex(0).getProperty("factor");
+    double factor = 0.0;
+
+    if (!double.TryParse(factorStr, NumberStyles.Number, ci, out factor))
+    {
+      return "";
+    }
+
+    double val = 0.0;
+
+    if (!double.TryParse(valStr, NumberStyles.Number, ci, out val))
+    {
+      return "";
+    }
+    val *= factor;
+    valStr = Convert.ToString(val);
+  }
+
+  return valStr;
+}
+
+// needed to end method
+void methodEnd()
+{
+  return;
+]]></method_code>
+  <method_type>C#</method_type>
+  <owned_by_id keyed_name="Innovator Admin" type="Identity">DBA5D86402BF43D5976854B8B48FCDD1</owned_by_id>
+  <name>SaveValueAsNumOrText</name>
+ </Item>
+</AML>

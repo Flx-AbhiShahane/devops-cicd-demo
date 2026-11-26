@@ -1,0 +1,3 @@
+<imports>
+  <package name="Item Characteristics And Classification" path="Item Characteristics And Classification\Import" />
+</imports>
