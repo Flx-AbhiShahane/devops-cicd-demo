@@ -1,0 +1,72 @@
+﻿<AML>
+ <Item type="Method" id="6CFC58BA90AF4F81AC77A82CFAD7C059" action="add">
+  <execution_allowed_to keyed_name="World" type="Identity">A73B655731924CD0B027E4F4D5FCC0A9</execution_allowed_to>
+  <method_code><![CDATA[// Flexur 28-Apr-2025 Ticket: PLM-42 (Characterstic search shows Value instead of Label for List properties)
+// There is no need to change display_value property. Return them as it is. Changes done below for 
+// Ticket: PLM-18 are no longer needed. Now old change is not required since it works
+// correctly with the changes done in ...\Innovator\Client\javascript\Aras\Client\Controls\Public\CellWrapper.ts
+
+return this;
+
+// Flexur 03-Oct-2024 Ticket: PLM-18 (Characteristic values are not being properly exported to Excel)
+// This problem is occuring for List type of properties.
+// This problem is happening because display_value property (when it is List type) should hold the Value 
+// of the List rather then Label of the List. It was observed that during save of 'display_value' property
+// in method: 'SaveValueAsNumOrText', the Label was saved in display_value rather then the actual value.
+// And actual value was saved in 'text_value' property.
+// Now method: 'SaveValueAsNumOrText' is updated so that for any new edits, actual value will be saved in 
+// display_value. However for existing data where Label was already saved in 'display_value' property, we 
+// need following fix to return actual value (if actual value was already stored in 'text_value' property)
+// This fix works along with another codetree 
+// change in file: Innovator\Client\Modules\cui\plugins\displayValuePropertyPlugin.ts
+
+// for (int i = 0; i < this.getItemCount(); i++) {
+//     var itm = this.getItemByIndex(i);
+//     var charactValueType = itm.getProperty("item_characteristic_value_type", "");
+//     if (charactValueType == "List") {
+//         var textValue = itm.getProperty("text_value", "");
+//         if (textValue != "") {
+//             itm.setProperty("display_value", textValue);
+//         }
+//     }
+// }
+// Flexur 03-Oct-2024
+
+
+/// this is critical to support multi language display of list values !!!
+
+//System.Diagnostics.Debugger.Break();
+// 5/17/2022 to fix IR-098928 [WATLOW UPGRADE] List values disappear after Save or Close 
+/*for (int i=0;i<this.getItemCount();i++) {
+	Item itm = this.getItemByIndex(i);
+	string charactValueType = itm.getProperty("item_characteristic_value_type","");
+	if (charactValueType == "List") {
+		string textValue = itm.getProperty("text_value","");
+		string itemCharacteristicId = itm.getProperty("item_characteristic_id","");
+		if (textValue != "" && itemCharacteristicId != "") {
+			itm.setProperty("display_value",getListValueLabel(itemCharacteristicId, textValue));
+		}
+	}
+
+}*/
+//return this;
+/*}
+
+// --- local functions ---
+public string getListValueLabel(string itemCharacteristicId, string listValue)
+{
+	// label is assumed to be in current language context of the user (session)
+	Item characteristicListValue = this.getInnovator().applyAML("<AML><Item type='Item Characteristic List Value' action='get' select='label,value'><source_id>"+itemCharacteristicId+"</source_id><value>" + System.Net.WebUtility.HtmlEncode(listValue) + "</value></Item></AML>");
+	if (characteristicListValue.isError()) {return "";}  // could not find the matching value
+	return characteristicListValue.getItemByIndex(0).getProperty("label","");
+}
+
+// needed to end method
+void methodEnd () {
+	return;
+*/
+]]></method_code>
+  <method_type>C#</method_type>
+  <name>resolveLanguageDisplayValue</name>
+ </Item>
+</AML>
